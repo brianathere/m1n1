@@ -58,18 +58,31 @@ _gxf_setup:
     gexit
 
 _gxf_entry:
+    // Preserve all AAPCS64 callee-saved GPRs across the user callee.
+    // GL callees may be raw asm that doesn't honour AAPCS64 (e.g.
+    // Apple SPTM __start, which writes x25-x28 in addition to x19-x24),
+    // so we cannot rely on them being preserved by the callee.
     stp x29, x30, [sp, #-16]!
+    stp x27, x28, [sp, #-16]!
+    stp x25, x26, [sp, #-16]!
     stp x23, x24, [sp, #-16]!
     stp x21, x22, [sp, #-16]!
     stp x19, x20, [sp, #-16]!
 
-    // these registers would be overwritten by each exception happening in GL1/2
-    // but we need them to gexit correctly again
+    // Save GL1 exception-capture regs. These would be overwritten by any
+    // exception happening in GL1/2 before gexit. The previous design held
+    // these values in x20-x24 across `blr x5`, which was broken for any
+    // callee that used those registers (the post-blr msr writes then fed
+    // garbage into the GL1 banked regs and broke gexit). Push to stack
+    // across the call instead.
     mrs x20, SYS_IMP_APL_SPSR_GL1
     mrs x21, SYS_IMP_APL_ASPSR_GL1
     mrs x22, SYS_IMP_APL_ESR_GL1
     mrs x23, SYS_IMP_APL_ELR_GL1
     mrs x24, SYS_IMP_APL_FAR_GL1
+    stp x20, x21, [sp, #-16]!
+    stp x22, x23, [sp, #-16]!
+    stp x24, xzr, [sp, #-16]!   // pad for 16-byte SP alignment
 
     mov x5, x0
     mov x0, x1
@@ -79,6 +92,9 @@ _gxf_entry:
 
     blr x5
 
+    ldp x24, xzr, [sp], #16
+    ldp x22, x23, [sp], #16
+    ldp x20, x21, [sp], #16
     msr SYS_IMP_APL_SPSR_GL1, x20
     msr SYS_IMP_APL_ASPSR_GL1, x21
     msr SYS_IMP_APL_ESR_GL1, x22
@@ -88,6 +104,8 @@ _gxf_entry:
     ldp x19, x20, [sp], #16
     ldp x21, x22, [sp], #16
     ldp x23, x24, [sp], #16
+    ldp x25, x26, [sp], #16
+    ldp x27, x28, [sp], #16
     ldp x29, x30, [sp], #16
 
     isb
