@@ -308,6 +308,26 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_MMU_INIT_SECONDARY:
             mmu_init_secondary(request->args[0]);
             break;
+        case P_MMU_MAP:
+            // args[0]=va, args[1]=pa, args[2]=size, args[3]=attr_idx, args[4]=perms
+            // attr_idx selects from MAIR_IDX_* (Normal, Normal-NC, Device-nGnRnE,
+            // Device-nGnRE, Device-nGRE, Device-GRE). mmu_add_mapping issues
+            // `tlbi vmalle1is` + `dsb ish` + `isb` itself.
+            mmu_add_mapping(request->args[0], request->args[1], request->args[2],
+                            (u8)request->args[3], request->args[4]);
+            break;
+        case P_MMU_UNMAP:
+            // args[0]=va, args[1]=size
+            // mmu_rm_mapping clears PTEs but does not TLBI (its existing
+            // callers all run pre-MMU-enable). Issue an inner-shareable
+            // TLBI here since the proxy runs with MMU enabled and the
+            // TLB may have cached translations for the now-cleared range.
+            mmu_rm_mapping(request->args[0], request->args[1]);
+            sysop("dsb ishst");
+            sysop("tlbi vmalle1is");
+            sysop("dsb ish");
+            sysop("isb");
+            break;
 
         case P_XZDEC: {
             uint32_t destlen, srclen;
