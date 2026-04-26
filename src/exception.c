@@ -17,6 +17,7 @@ void *el0_stack_base = (void *)(u64)(&el0_stack[EL0_STACK_SIZE]);
 
 extern char _vectors_start[0];
 extern char _el1_vectors_start[0];
+extern char _gxf_entry_after_blr[0];
 
 volatile enum exc_guard_t exc_guard = GUARD_OFF;
 volatile int exc_count = 0;
@@ -258,6 +259,39 @@ void exc_sync(u64 *regs)
     u32 ec = (esr & ESR_EC) >> ESR_EC_SHIFT;
     u32 iss = esr & ESR_ISS;
 
+    // GL1/GL2 exception-return shim (early short-circuit).
+    //
+    // For unhandled GL faults under default exc_guard: stamp a sentinel
+    // into the saved x0 and redirect ELR_EL1 to a clean post-blr resume
+    // point in _gxf_entry. _gxf_exc_return then copies ELR_EL1 → GL1 ELR
+    // and does gexit, which resumes at _gxf_entry_after_blr in GL
+    // context. _gxf_entry's tail pops the captured GL1 regs + callee-
+    // saved regs and gexits cleanly back to EL2 with the sentinel in x0.
+    //
+    // This avoids touching potentially-faulting resources at GL2 context
+    // (print_regs' register access, L2C_ERR_STS read, etc.) which can
+    // themselves fault and deadlock m1n1, and the original reboot path
+    // that would burn an 8.7s WDT cycle on every iteration.
+    //
+    // Sentinel layout in saved x0:
+    //   [63:36] = 0xdeadace
+    //   [31:16] = ec
+    //   [15:0]  = iss low 16 bits
+    // The C caller of gl_call can check (ret >> 36) == 0xdeadace to
+    // distinguish an exception abort from a legitimate user return.
+    //
+    // ESR_EC_BRK falls through to the existing brk handling (intentional
+    // trap). Non-default exc_guard modes (GUARD_SKIP/MARK/RETURN) also
+    // fall through so their semantics still apply if someone sets a
+    // guard around a gl_call.
+    if (in_gl && ec != ESR_EC_BRK && (exc_guard & GUARD_TYPE_MASK) == GUARD_OFF) {
+        if (!(exc_guard & GUARD_SILENT))
+            printf("[GL abort] ec=0x%x iss=0x%x elr=0x%lx\n", ec, iss, elr);
+        regs[0] = (0xdeadaceULL << 36) | ((u64)ec << 16) | (iss & 0xffff);
+        msr(ELR_EL1, (u64)_gxf_entry_after_blr);
+        return;
+    }
+
     // check brk instructions
     if (ec == ESR_EC_BRK && iss == 0 && elsp == SPSR_M_EL0) {
         // brk 0
@@ -351,6 +385,8 @@ void exc_sync(u64 *regs)
             break;
         case GUARD_OFF:
         default:
+            // GL path handled at the top of exc_sync. This default case
+            // only fires for non-GL exceptions now.
             printf("Unhandled exception, rebooting...\n");
             flush_and_reboot();
     }
@@ -458,18 +494,40 @@ void exc_fiq(u64 *regs)
 
 void exc_serr(u64 *regs)
 {
+    bool in_gl = in_gl12();
+
     if (!(exc_guard & GUARD_SILENT))
-        printf("Exception: SError\n");
+        printf("Exception: SError%s\n", in_gl ? " (GL)" : "");
 
     sysop("dsb sy");
     sysop("isb");
 
-    if (!(exc_guard & GUARD_SILENT))
-        print_regs(regs, 0);
+    // GL1/GL2 SError shim. Run BEFORE print_regs (which reads sysregs
+    // that can themselves fault at GL context — the original reboot path
+    // could deadlock m1n1 with a secondary fault). Same pattern as the
+    // exc_sync GL shim: stamp a sentinel into saved x0, redirect ELR_EL1
+    // to _gxf_entry_after_blr so gexit resumes cleanly in GL and
+    // _gxf_entry's tail unwinds back to EL2.
+    //
+    // Without the ELR redirect, gexit would resume at the SError-time
+    // GL1 ELR (whatever PC the asynchronous fault interrupted) and most
+    // likely immediately re-trigger the same SError condition.
+    //
+    // Sentinel layout: [63:32] = 0xdead5e55, [31:0] = ESR_GL1 low 32 bits.
+    if (in_gl && (exc_guard & GUARD_TYPE_MASK) == GUARD_OFF) {
+        u64 esr_gl = mrs(SYS_IMP_APL_ESR_GL1);
+        if (!(exc_guard & GUARD_SILENT))
+            printf("[GL SError] ESR=0x%lx ELR=0x%lx\n", esr_gl, mrs(SYS_IMP_APL_ELR_GL1));
+        regs[0] = (0xdead5e55ULL << 32) | (u32)(esr_gl & 0xffffffff);
+        msr(ELR_EL1, (u64)_gxf_entry_after_blr);
+    } else {
+        if (!(exc_guard & GUARD_SILENT))
+            print_regs(regs, 0);
 
-    if ((exc_guard & GUARD_TYPE_MASK) == GUARD_OFF) {
-        printf("Unhandled exception, rebooting...\n");
-        flush_and_reboot();
+        if ((exc_guard & GUARD_TYPE_MASK) == GUARD_OFF) {
+            printf("Unhandled exception, rebooting...\n");
+            flush_and_reboot();
+        }
     }
 
     exc_count++;
