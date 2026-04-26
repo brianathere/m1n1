@@ -559,6 +559,7 @@ class M1N1Proxy(Reloadable):
     P_MMU_INIT_SECONDARY = 0x30f
     P_MMU_MAP = 0x310
     P_MMU_UNMAP = 0x311
+    P_DUMP_EL1_STATE = 0x312
 
     P_XZDEC = 0x400
     P_GZDEC = 0x401
@@ -997,6 +998,15 @@ class M1N1Proxy(Reloadable):
         clear so the TLB doesn't retain stale translations.
         """
         self.request(self.P_MMU_UNMAP, va, size)
+    def dump_el1_state(self, out_va):
+        """Snapshot 12 EL1/EL2 sysregs into out_va (caller-allocated, ≥96 bytes).
+
+        Layout (12x u64): SCTLR_EL1, MAIR_EL1, TCR_EL1, TTBR0_EL1, TTBR1_EL1,
+        VBAR_EL1, ESR_EL1, FAR_EL1, SPRR_PERM_EL1, SPRR_CONFIG_EL1, CurrentEL,
+        HCR_EL2. SPRR fields are 0 if GXF unsupported; HCR_EL2 is 0 if the
+        snapshot was taken outside EL2.
+        """
+        self.request(self.P_DUMP_EL1_STATE, out_va)
 
 
     def xzdec(self, inbuf, insize, outbuf=0, outsize=0):

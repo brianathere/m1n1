@@ -328,6 +328,30 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             sysop("dsb ish");
             sysop("isb");
             break;
+        case P_DUMP_EL1_STATE: {
+            // args[0] = output VA (caller-allocated buffer >= 96 bytes).
+            // Writes 12 u64s in fixed order: SCTLR_EL1, MAIR_EL1, TCR_EL1,
+            // TTBR0_EL1, TTBR1_EL1, VBAR_EL1, ESR_EL1, FAR_EL1,
+            // SPRR_PERM_EL1 (or 0 if SPRR off), SPRR_CONFIG_EL1 (ditto),
+            // CurrentEL, HCR_EL2 (or 0 if not in EL2). Provides a one-shot
+            // snapshot for cross-context comparison (e.g. EL2 m1n1 vs EL1
+            // stub vs Linux EL1) without needing N round-trips per reg.
+            u64 *out = (u64 *)request->args[0];
+            out[0] = mrs(SCTLR_EL1);
+            out[1] = mrs(MAIR_EL1);
+            out[2] = mrs(TCR_EL1);
+            out[3] = mrs(TTBR0_EL1);
+            out[4] = mrs(TTBR1_EL1);
+            out[5] = mrs(VBAR_EL1);
+            out[6] = mrs(ESR_EL1);
+            out[7] = mrs(FAR_EL1);
+            out[8] = supports_gxf() ? mrs(SYS_IMP_APL_SPRR_PERM_EL1) : 0;
+            out[9] = supports_gxf() ? mrs(SYS_IMP_APL_SPRR_CONFIG_EL1) : 0;
+            out[10] = mrs(CurrentEL);
+            out[11] = in_el2() ? mrs(HCR_EL2) : 0;
+            sysop("dsb sy");
+            break;
+        }
 
         case P_XZDEC: {
             uint32_t destlen, srclen;
