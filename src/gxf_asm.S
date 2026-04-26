@@ -91,6 +91,8 @@ _gxf_entry:
     mov x3, x4
 
     blr x5
+.globl _gxf_entry_after_blr
+_gxf_entry_after_blr:
 
     ldp x24, xzr, [sp], #16
     ldp x22, x23, [sp], #16
