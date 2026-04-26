@@ -77,6 +77,8 @@ typedef enum {
     P_MMU_DISABLE,
     P_MMU_RESTORE,
     P_MMU_INIT_SECONDARY,
+    P_MMU_MAP,   // mmu_add_mapping(va, pa, size, attr_idx, perms)
+    P_MMU_UNMAP, // mmu_rm_mapping(va, size)
 
     P_XZDEC = 0x400, // Decompression and data processing ops
     P_GZDEC,

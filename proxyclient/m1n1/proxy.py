@@ -557,6 +557,8 @@ class M1N1Proxy(Reloadable):
     P_MMU_DISABLE = 0x30d
     P_MMU_RESTORE = 0x30e
     P_MMU_INIT_SECONDARY = 0x30f
+    P_MMU_MAP = 0x310
+    P_MMU_UNMAP = 0x311
 
     P_XZDEC = 0x400
     P_GZDEC = 0x401
@@ -960,6 +962,41 @@ class M1N1Proxy(Reloadable):
         self.request(self.P_MMU_RESTORE, flags)
     def mmu_init_secondary(self, cpu):
         self.request(self.P_MMU_INIT_SECONDARY, cpu)
+
+    # MAIR indices, must match src/memory.h MAIR_IDX_*.
+    MAIR_IDX_NORMAL        = 0
+    MAIR_IDX_NORMAL_NC     = 1
+    MAIR_IDX_DEVICE_nGnRnE = 2
+    MAIR_IDX_DEVICE_nGnRE  = 3
+    MAIR_IDX_DEVICE_nGRE   = 4
+    MAIR_IDX_DEVICE_GRE    = 5
+
+    def mmu_map(self, va, pa, size, perms, attr_idx=MAIR_IDX_NORMAL):
+        """Add a runtime EL1 stage-1 mapping va->pa of `size` bytes with `perms`.
+
+        attr_idx selects from MAIR_IDX_* (default Normal cacheable). Use
+        MAIR_IDX_DEVICE_nGnRE / nGnRnE for MMIO regions where ordering matters.
+
+        Constraints (violations panic m1n1, which then reboots):
+          - va, pa, and size must be page-aligned (4 KiB or 16 KiB depending
+            on the CPU). Use proxy.P_GET_PAGE_SIZE / utils to query.
+          - va must fit in 48 bits (mmu_pt_get_l2 asserts l1idx <
+            ENTRIES_PER_L1_TABLE). For canonical-form sign-extended VAs
+            (0xfffffe.../0xfffffff...), pass the low 48 bits; the hardware
+            sign-extends on access.
+
+        TLB invalidation (tlbi vmalle1is) is issued by mmu_add_mapping
+        after the page-table updates.
+        """
+        self.request(self.P_MMU_MAP, va, pa, size, attr_idx, perms)
+    def mmu_unmap(self, va, size):
+        """Remove a runtime EL1 stage-1 mapping previously added with mmu_map.
+
+        va and size must be page-aligned (same constraints as mmu_map; alignment
+        violations panic m1n1). The proxy issues tlbi vmalle1is after the PTE
+        clear so the TLB doesn't retain stale translations.
+        """
+        self.request(self.P_MMU_UNMAP, va, size)
 
 
     def xzdec(self, inbuf, insize, outbuf=0, outsize=0):
