@@ -523,6 +523,17 @@ static void mmu_init_sprr(void)
     msr_sync(SYS_IMP_APL_SPRR_CONFIG_EL1, 1);
     msr_sync(SYS_IMP_APL_SPRR_PERM_EL0, SPRR_DEFAULT_PERM_EL0);
     msr_sync(SYS_IMP_APL_SPRR_PERM_EL1, SPRR_DEFAULT_PERM_EL1);
+    // Also populate the EL12/EL02 SPRR tables when running at EL2 with
+    // GXF available. These banked views are consulted at GL2 context;
+    // leaving them at reset value causes blanket access denials at GL2
+    // even for regions whose EL1/EL0 perms allow access. XNU writes
+    // both per-CPU. Gated on in_el2() because _EL12/_EL02 sysregs
+    // require E2H=1 (set by exception_initialize) and on supports_gxf()
+    // because there is no GL2 consumer without it.
+    if (in_el2() && supports_gxf()) {
+        msr_sync(SYS_IMP_APL_SPRR_PERM_EL02, SPRR_DEFAULT_PERM_EL0);
+        msr_sync(SYS_IMP_APL_SPRR_PERM_EL12, SPRR_DEFAULT_PERM_EL1);
+    }
     msr_sync(SYS_IMP_APL_SPRR_CONFIG_EL1, 0);
 }
 
